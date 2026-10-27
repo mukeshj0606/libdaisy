@@ -330,9 +330,6 @@ void daisy::initialize()
       }
    }
 
-   // assuming a 0.5 image smoothness, we pull this to 1.6 as in sift
-   smooth_layers( gradient_layers, m_h, m_w, m_hist_th_q_no, sqrt(g_sigma_init*g_sigma_init-0.25) );
-
    if( m_verbosity == 4 ) {
       for( int ii=0; ii<m_hist_th_q_no; ii++ ) {
          string file = "sgradient_layers"+num2str(ii)+".bin";
@@ -480,6 +477,13 @@ void daisy::compute_smoothed_gradient_layers()
    float* prev_cube = m_smoothed_gradient_layers;
    float* cube = NULL;
 
+   // Pull the input from its assumed 0.5 smoothness to the initial scale while
+   // each orientation layer is already hot for the first cube convolution.
+   const double init_sigma = sqrt(g_sigma_init*g_sigma_init-0.25);
+   const int init_fsz = filter_size(init_sigma);
+   float* init_filter = new float[init_fsz];
+   gaussian_1d(init_filter, init_fsz, init_sigma, 0);
+
    double sigma;
    for( int r=0; r<g_cube_number; r++ )
    {
@@ -498,11 +502,14 @@ void daisy::compute_smoothed_gradient_layers()
 #endif
       for( int th=0; th<m_hist_th_q_no; th++ )
       {
-         convolve_sym( prev_cube+th*m_layer_size, m_h, m_w, filter, fsz, cube+th*m_layer_size );
+         float* prev_layer = prev_cube+th*m_layer_size;
+         if( r == 0 ) convolve_sym( prev_layer, m_h, m_w, init_filter, init_fsz );
+         convolve_sym( prev_layer, m_h, m_w, filter, fsz, cube+th*m_layer_size );
       }
       deallocate(filter);
       prev_cube = cube;
    }
+   deallocate(init_filter);
    if( m_verbosity > 0 ) {
       time(&en);
       std::cout<<" in "<<difftime(en,st)<<" seconds\n";
