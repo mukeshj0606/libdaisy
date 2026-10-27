@@ -455,6 +455,32 @@ inline void daisy:: i_get_histogram( float* histogram, double y, double x, doubl
    else if( fshift > 0.99 ) bi_get_histogram( histogram, y, x, ishift+1, cube );
    else                     ti_get_histogram( histogram, y, x,  shift  , cube );
 }
+
+namespace daisy_detail {
+/// core of bi_get_histogram: histogram[h] = w0*A[h']+w1*C[h']+w2*B[h']+w3*D[h']
+/// where h' = (h+shift) mod hist_size and 0 <= shift <= hist_size. the four
+/// weighted terms are fused into one expression so histogram[h] stays in a
+/// register (and the multiply-adds can contract to fma), and the circular
+/// shift is split into two contiguous ranges so there is no per-element
+/// branch. the additive order matches the original four-pass code.
+inline void bilinear_accumulate_histogram( float* __restrict histogram, int hist_size, int shift,
+                                           const float* __restrict A, const float* __restrict B,
+                                           const float* __restrict C, const float* __restrict D,
+                                           float w0, float w1, float w2, float w3 )
+{
+   const int split = hist_size-shift; // h < split: index h+shift; else wrap.
+   int h=0;
+   for( ; h<split; h++ ) {
+      const int idx = h+shift;
+      histogram[h] = w0*A[idx] + w1*C[idx] + w2*B[idx] + w3*D[idx];
+   }
+   for( ; h<hist_size; h++ ) {
+      const int idx = h+shift-hist_size;
+      histogram[h] = w0*A[idx] + w1*C[idx] + w2*B[idx] + w3*D[idx];
+   }
+}
+}
+
 inline void daisy::bi_get_histogram( float* histogram, double y, double x, int shift, float* hcube )
 {
    int mnx = int( x );
@@ -482,24 +508,7 @@ inline void daisy::bi_get_histogram( float* histogram, double y, double x, int s
    float w2 = alpha-w0; // (1-beta)*alpha;
    float w3 = 1+w0-alpha-beta; // (1-beta)*(1-alpha);
 
-   int h;
-
-   for( h=0; h<m_hist_th_q_no; h++ ) {
-      if( h+shift < m_hist_th_q_no ) histogram[h] = w0*A[h+shift];
-      else                           histogram[h] = w0*A[h+shift-m_hist_th_q_no];
-   }
-   for( h=0; h<m_hist_th_q_no; h++ ) {
-      if( h+shift < m_hist_th_q_no ) histogram[h] += w1*C[h+shift];
-      else                           histogram[h] += w1*C[h+shift-m_hist_th_q_no];
-   }
-   for( h=0; h<m_hist_th_q_no; h++ ) {
-      if( h+shift < m_hist_th_q_no ) histogram[h] += w2*B[h+shift];
-      else                           histogram[h] += w2*B[h+shift-m_hist_th_q_no];
-   }
-   for( h=0; h<m_hist_th_q_no; h++ ) {
-      if( h+shift < m_hist_th_q_no ) histogram[h] += w3*D[h+shift];
-      else                           histogram[h] += w3*D[h+shift-m_hist_th_q_no];
-   }
+   daisy_detail::bilinear_accumulate_histogram( histogram, m_hist_th_q_no, shift, A, B, C, D, w0, w1, w2, w3 );
 }
 inline void daisy::ti_get_histogram( float* histogram, double y, double x, double shift, float* hcube )
 {
